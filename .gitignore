@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+.Spotlight-V100
+.Trashes
+
+# Build artifacts
+build/
+NotesToMarkdown.app/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+.build/

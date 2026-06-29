@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-APP_NAME="NotesToMarkdown"
+APP_NAME="ScrawlMD"
 APP_BUNDLE="${APP_NAME}.app"
 BUILD_DIR="build"
 
@@ -9,7 +9,7 @@ echo "Building ${APP_NAME}..."
 
 # Compile
 mkdir -p "${BUILD_DIR}"
-swiftc main.swift \
+swiftc *.swift \
     -o "${BUILD_DIR}/${APP_NAME}" \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target arm64-apple-macos14.0 \
@@ -29,6 +29,6 @@ echo "Done! Run with:"
 echo "  open ${APP_BUNDLE}"
 echo ""
 echo "Or with your API key:"
-echo "  ANTHROPIC_API_KEY=sk-ant-... open ${APP_BUNDLE}"
+echo "  GEMINI_API_KEY=AIza... open ${APP_BUNDLE}"
 echo ""
 echo "You can also set the key in-app via the ⚙ button."

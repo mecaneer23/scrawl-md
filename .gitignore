@@ -6,6 +6,7 @@
 # Build artifacts
 build/
 NotesToMarkdown.app/
+ScrawlMD.app/
 
 # Xcode
 *.xcodeproj/

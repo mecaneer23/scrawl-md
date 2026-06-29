@@ -12,7 +12,7 @@ mkdir -p "${BUILD_DIR}"
 swiftc main.swift \
     -o "${BUILD_DIR}/${APP_NAME}" \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
-    -target arm64-apple-macos13.0 \
+    -target arm64-apple-macos14.0 \
     -O
 
 # Create .app bundle
@@ -22,7 +22,7 @@ cp "${BUILD_DIR}/${APP_NAME}" "${APP_BUNDLE}/Contents/MacOS/"
 cp Info.plist "${APP_BUNDLE}/Contents/"
 
 # Sign ad-hoc so macOS treats it as a proper app (required for Import from iPhone)
-codesign --force --deep --sign - "${APP_BUNDLE}"
+codesign --force --deep --sign - "${APP_BUNDLE}" 2>/dev/null || codesign --deep --sign - "${APP_BUNDLE}"
 
 echo ""
 echo "Done! Run with:"

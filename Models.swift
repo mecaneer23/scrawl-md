@@ -1,6 +1,10 @@
-import Foundation
+import AppKit
 
 // MARK: - Enums
+
+enum GeminiInput {
+    case image(NSImage)
+}
 
 enum ConversionMode {
     case verbatim, cleaned

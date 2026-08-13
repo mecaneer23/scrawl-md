@@ -14,10 +14,11 @@ class MainViewController: NSViewController {
     private var resultView: NSTextView!
     private var copyButton: NSButton!
     private var settingsButton: NSButton!
-    private var statusLabel: NSTextField!
+    private var statusScrollView: NSScrollView!
+    private var statusView: NSTextView!
     private var importButton: NSButton!
 
-    private var capturedImage: NSImage?
+    private var capturedInputs: [GeminiInput] = []
     private var isProcessing = false
     private var autoConvertNext = false
     private var desktopMonitor: DispatchSourceFileSystemObject?
@@ -64,8 +65,8 @@ class MainViewController: NSViewController {
         // Image drop zone
         dropZone = ImageDropZone(frame: .zero)
         dropZone.translatesAutoresizingMaskIntoConstraints = false
-        dropZone.onImageSet = { [weak self] image in
-            self?.imageWasSet(image)
+        dropZone.onInputsSet = { [weak self] inputs in
+            self?.inputsWereSet(inputs)
         }
         view.addSubview(dropZone)
 
@@ -100,12 +101,28 @@ class MainViewController: NSViewController {
         spinner.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(spinner)
 
-        // Status label
-        statusLabel = NSTextField(labelWithString: "")
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.font = NSFont.systemFont(ofSize: 11)
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(statusLabel)
+        // Status scroll view (single-line, horizontally scrollable)
+        statusScrollView = NSScrollView()
+        statusScrollView.hasHorizontalScroller = true
+        statusScrollView.hasVerticalScroller = false
+        statusScrollView.autohidesScrollers = true
+        statusScrollView.borderType = .noBorder
+        statusScrollView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(statusScrollView)
+
+        statusView = NSTextView()
+        statusView.isEditable = false
+        statusView.isSelectable = true
+        statusView.font = NSFont.systemFont(ofSize: 11)
+        statusView.textColor = .secondaryLabelColor
+        statusView.backgroundColor = .clear
+        statusView.textContainerInset = .zero
+        statusView.textContainer?.lineFragmentPadding = 0
+        statusView.textContainer?.widthTracksTextView = false
+        statusView.textContainer?.containerSize = CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        statusView.isHorizontallyResizable = true
+        statusView.isVerticallyResizable = false
+        statusScrollView.documentView = statusView
 
         // Result text view in scroll view
         resultScrollView = NSScrollView()
@@ -125,6 +142,13 @@ class MainViewController: NSViewController {
         resultView.textContainerInset = NSSize(width: 8, height: 8)
         resultView.isAutomaticSpellingCorrectionEnabled = false
         resultView.isAutomaticQuoteSubstitutionEnabled = false
+        resultView.isVerticallyResizable = true
+        resultView.isHorizontallyResizable = false
+        resultView.autoresizingMask = [.width]
+        resultView.minSize = NSSize(width: 0, height: 0)
+        resultView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        resultView.textContainer?.widthTracksTextView = true
+        resultView.textContainer?.heightTracksTextView = false
         resultScrollView.documentView = resultView
 
         // Copy button
@@ -169,12 +193,14 @@ class MainViewController: NSViewController {
             spinner.widthAnchor.constraint(equalToConstant: 18),
             spinner.heightAnchor.constraint(equalToConstant: 18),
 
-            // Status label
-            statusLabel.topAnchor.constraint(equalTo: convertButton.bottomAnchor, constant: 6),
-            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            // Status scroll view
+            statusScrollView.topAnchor.constraint(equalTo: convertButton.bottomAnchor, constant: 6),
+            statusScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
+            statusScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
+            statusScrollView.heightAnchor.constraint(equalToConstant: 18),
 
             // Result scroll view
-            resultScrollView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
+            resultScrollView.topAnchor.constraint(equalTo: statusScrollView.bottomAnchor, constant: 8),
             resultScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
             resultScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
             resultScrollView.bottomAnchor.constraint(equalTo: copyButton.topAnchor, constant: -10),
@@ -185,21 +211,16 @@ class MainViewController: NSViewController {
             copyButton.widthAnchor.constraint(equalToConstant: 100),
         ])
 
-        // Wire up result view width to scroll view
-        resultView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            resultView.widthAnchor.constraint(equalTo: resultScrollView.widthAnchor)
-        ])
     }
 
-    private func imageWasSet(_ image: NSImage) {
-        log("imageWasSet: size=\(image.size), autoConvertNext=\(autoConvertNext)")
-        capturedImage = image
+    private func inputsWereSet(_ inputs: [GeminiInput]) {
+        log("inputsWereSet: \(inputs.count) input(s), autoConvertNext=\(autoConvertNext)")
+        capturedInputs = inputs
         placeholderLabel.isHidden = true
         convertButton.isEnabled = true
         setStatus("")
         if autoConvertNext {
-            log("imageWasSet: auto-triggering convert")
+            log("inputsWereSet: auto-triggering convert")
             autoConvertNext = false
             convert()
         }
@@ -461,21 +482,22 @@ class MainViewController: NSViewController {
             NSApp.activate(ignoringOtherApps: true)
             view.window?.makeKeyAndOrderFront(nil)
             autoConvertNext = true
-            imageWasSet(image)
+            inputsWereSet([.image(image)])
             break
         }
     }
 
     private func clearImage() {
-        capturedImage = nil
+        capturedInputs = []
         dropZone.image = nil
         placeholderLabel.isHidden = false
         convertButton.isEnabled = false
     }
 
     @objc private func convert() {
-        guard let image = capturedImage, !isProcessing else { return }
+        guard !capturedInputs.isEmpty, !isProcessing else { return }
 
+        let inputs = capturedInputs
         let mode: ConversionMode = modeControl.selectedSegment == 0 ? .verbatim : .cleaned
         let key = apiKey
 
@@ -483,13 +505,13 @@ class MainViewController: NSViewController {
         convertButton.isEnabled = false
         spinner.isHidden = false
         spinner.startAnimation(nil)
-        setStatus("Sending to Gemini...")
+        setStatus("Sending to Gemini…")
         resultView.string = ""
         copyButton.isEnabled = false
 
         Task {
             do {
-                let markdown = try await GeminiAPI.convert(image: image, mode: mode, apiKey: key)
+                let markdown = try await GeminiAPI.convert(inputs: inputs, mode: mode, apiKey: key)
                 await MainActor.run {
                     resultView.string = markdown
                     copyButton.isEnabled = true
@@ -503,7 +525,7 @@ class MainViewController: NSViewController {
             }
             await MainActor.run {
                 isProcessing = false
-                convertButton.isEnabled = capturedImage != nil
+                convertButton.isEnabled = !capturedInputs.isEmpty
                 spinner.stopAnimation(nil)
                 spinner.isHidden = true
             }
@@ -541,6 +563,7 @@ class MainViewController: NSViewController {
     }
 
     private func setStatus(_ msg: String) {
-        statusLabel.stringValue = msg
+        statusView.string = msg
+        if !msg.isEmpty { log("status: \(msg)") }
     }
 }

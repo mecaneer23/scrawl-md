@@ -3,15 +3,20 @@ import AppKit
 // MARK: - Gemini API
 
 struct GeminiAPI {
-    static func convert(image: NSImage, mode: ConversionMode, apiKey: String) async throws -> String {
+    static func convert(inputs: [GeminiInput], mode: ConversionMode, apiKey: String) async throws -> String {
         guard !apiKey.isEmpty else { throw APIError.noAPIKey }
 
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
-            throw APIError.imageConversionFailed
+        var imageParts: [[String: Any]] = []
+        for input in inputs {
+            if case .image(let image) = input {
+                guard let tiffData = image.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiffData),
+                      let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
+                    throw APIError.imageConversionFailed
+                }
+                imageParts.append(["inline_data": ["mime_type": "image/jpeg", "data": jpegData.base64EncodedString()]])
+            }
         }
-        let base64 = jpegData.base64EncodedString()
 
         let prompt: String
         switch mode {
@@ -33,14 +38,12 @@ struct GeminiAPI {
 
         let body: [String: Any] = [
             "contents": [[
-                "parts": [
-                    ["inline_data": ["mime_type": "image/jpeg", "data": base64]],
-                    ["text": prompt]
-                ]
-            ]]
+                "parts": imageParts + [["text": prompt]]
+            ]],
+            "generationConfig": ["maxOutputTokens": 65536]
         ]
 
-        let urlStr = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=\(apiKey)"
+        let urlStr = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=\(apiKey)"
         var request = URLRequest(url: URL(string: urlStr)!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

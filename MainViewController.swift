@@ -18,7 +18,7 @@ class MainViewController: NSViewController {
     private var statusView: NSTextView!
     private var importButton: NSButton!
 
-    private var capturedInputs: [GeminiInput] = []
+    private var capturedGroups: [InputGroup] = []
     private var isProcessing = false
     private var autoConvertNext = false
     private var desktopMonitor: DispatchSourceFileSystemObject?
@@ -65,8 +65,8 @@ class MainViewController: NSViewController {
         // Image drop zone
         dropZone = ImageDropZone(frame: .zero)
         dropZone.translatesAutoresizingMaskIntoConstraints = false
-        dropZone.onInputsSet = { [weak self] inputs in
-            self?.inputsWereSet(inputs)
+        dropZone.onGroupsSet = { [weak self] groups in
+            self?.groupsWereSet(groups)
         }
         view.addSubview(dropZone)
 
@@ -213,14 +213,14 @@ class MainViewController: NSViewController {
 
     }
 
-    private func inputsWereSet(_ inputs: [GeminiInput]) {
-        log("inputsWereSet: \(inputs.count) input(s), autoConvertNext=\(autoConvertNext)")
-        capturedInputs = inputs
+    private func groupsWereSet(_ groups: [InputGroup]) {
+        log("groupsWereSet: \(groups.count) group(s), autoConvertNext=\(autoConvertNext)")
+        capturedGroups = groups
         placeholderLabel.isHidden = true
         convertButton.isEnabled = true
         setStatus("")
         if autoConvertNext {
-            log("inputsWereSet: auto-triggering convert")
+            log("groupsWereSet: auto-triggering convert")
             autoConvertNext = false
             convert()
         }
@@ -482,50 +482,61 @@ class MainViewController: NSViewController {
             NSApp.activate(ignoringOtherApps: true)
             view.window?.makeKeyAndOrderFront(nil)
             autoConvertNext = true
-            inputsWereSet([.image(image)])
+            groupsWereSet([InputGroup(name: "", inputs: [.image(image)])])
             break
         }
     }
 
     private func clearImage() {
-        capturedInputs = []
+        capturedGroups = []
         dropZone.image = nil
         placeholderLabel.isHidden = false
         convertButton.isEnabled = false
     }
 
     @objc private func convert() {
-        guard !capturedInputs.isEmpty, !isProcessing else { return }
+        guard !capturedGroups.isEmpty, !isProcessing else { return }
 
-        let inputs = capturedInputs
+        let groups = capturedGroups
         let mode: ConversionMode = modeControl.selectedSegment == 0 ? .verbatim : .cleaned
         let key = apiKey
+        let multiFile = groups.count > 1
 
         isProcessing = true
         convertButton.isEnabled = false
         spinner.isHidden = false
         spinner.startAnimation(nil)
-        setStatus("Sending to Gemini…")
         resultView.string = ""
         copyButton.isEnabled = false
 
         Task {
-            do {
-                let markdown = try await GeminiAPI.convert(inputs: inputs, mode: mode, apiKey: key)
-                await MainActor.run {
-                    resultView.string = markdown
-                    copyButton.isEnabled = true
-                    setStatus("Done.")
-                    clearImage()
-                }
-            } catch {
-                await MainActor.run {
-                    setStatus("Error: \(error.localizedDescription)")
+            var sections: [String] = []
+            var failed = false
+            for (i, group) in groups.enumerated() {
+                let label = multiFile ? "\(i + 1) of \(groups.count): \(group.name)" : "1 of 1"
+                await MainActor.run { setStatus("Converting \(label)…") }
+                do {
+                    let markdown = try await GeminiAPI.convert(inputs: group.inputs, mode: mode, apiKey: key)
+                    if multiFile {
+                        sections.append("## \(group.name)\n\n\(markdown)")
+                    } else {
+                        sections.append(markdown)
+                    }
+                } catch {
+                    await MainActor.run { setStatus("Error on \(group.name): \(error.localizedDescription)") }
+                    failed = true
+                    break
                 }
             }
             await MainActor.run {
+                if !sections.isEmpty {
+                    resultView.string = sections.joined(separator: "\n\n---\n\n")
+                    copyButton.isEnabled = true
+                    if !failed { setStatus("Done.") }
+                    clearImage()
+                }
                 isProcessing = false
-                convertButton.isEnabled = !capturedInputs.isEmpty
+                convertButton.isEnabled = !capturedGroups.isEmpty
                 spinner.stopAnimation(nil)
                 spinner.isHidden = true
             }

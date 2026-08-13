@@ -6,6 +6,11 @@ enum GeminiInput {
     case image(NSImage)
 }
 
+struct InputGroup {
+    let name: String
+    let inputs: [GeminiInput]
+}
+
 enum ConversionMode {
     case verbatim, cleaned
 }

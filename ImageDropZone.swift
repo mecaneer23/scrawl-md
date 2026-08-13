@@ -4,7 +4,7 @@ import PDFKit
 // MARK: - Image Drop Zone
 
 class ImageDropZone: NSImageView {
-    var onInputsSet: (([GeminiInput]) -> Void)?
+    var onGroupsSet: (([InputGroup]) -> Void)?
     private var suppressCallback = false
     private var handledDragManually = false
 
@@ -30,7 +30,7 @@ class ImageDropZone: NSImageView {
     override var image: NSImage? {
         didSet {
             guard !suppressCallback, let img = image else { return }
-            onInputsSet?([.image(img)])
+            onGroupsSet?([InputGroup(name: "", inputs: [.image(img)])])
         }
     }
 
@@ -41,26 +41,28 @@ class ImageDropZone: NSImageView {
             return super.performDragOperation(sender)
         }
 
-        var inputs: [GeminiInput] = []
+        var groups: [InputGroup] = []
         for url in urls {
+            let name = url.deletingPathExtension().lastPathComponent
             if url.pathExtension.lowercased() == "pdf",
                let doc = PDFDocument(url: url) {
                 let pages = renderPDFPages(doc)
                 log("performDragOperation: PDF \(url.lastPathComponent) \(pages.count) page(s)")
-                inputs.append(contentsOf: pages.map { .image($0) })
+                if !pages.isEmpty { groups.append(InputGroup(name: name, inputs: pages.map { .image($0) })) }
             } else if let img = NSImage(contentsOf: url) {
-                inputs.append(.image(img))
+                groups.append(InputGroup(name: name, inputs: [.image(img)]))
             }
         }
 
-        guard !inputs.isEmpty else { return super.performDragOperation(sender) }
+        guard !groups.isEmpty else { return super.performDragOperation(sender) }
 
         handledDragManually = true
         suppressCallback = true
-        if case .image(let first) = inputs.first { image = first }
+        if case .image(let first) = groups.first?.inputs.first { image = first }
         suppressCallback = false
-        log("performDragOperation: \(inputs.count) input(s) from \(urls.count) file(s)")
-        onInputsSet?(inputs)
+        let totalInputs = groups.reduce(0) { $0 + $1.inputs.count }
+        log("performDragOperation: \(groups.count) group(s), \(totalInputs) input(s)")
+        onGroupsSet?(groups)
         return true
     }
 

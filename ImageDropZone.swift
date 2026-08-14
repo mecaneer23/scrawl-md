@@ -34,6 +34,12 @@ class ImageDropZone: NSImageView {
         }
     }
 
+    func setPreview(_ image: NSImage) {
+        suppressCallback = true
+        self.image = image
+        suppressCallback = false
+    }
+
     override func mouseDown(with event: NSEvent) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true

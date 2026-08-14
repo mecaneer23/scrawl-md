@@ -121,8 +121,8 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
         statusView = NSTextView()
         statusView.isEditable = false
         statusView.isSelectable = true
-        statusView.font = NSFont.systemFont(ofSize: 11)
-        statusView.textColor = .secondaryLabelColor
+        statusView.font = NSFont.systemFont(ofSize: 12)
+        statusView.textColor = .labelColor
         statusView.backgroundColor = .clear
         statusView.textContainerInset = .zero
         statusView.textContainer?.lineFragmentPadding = 0
@@ -182,7 +182,7 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
             statusScrollView.topAnchor.constraint(equalTo: convertButton.bottomAnchor, constant: 6),
             statusScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
             statusScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
-            statusScrollView.heightAnchor.constraint(equalToConstant: 16),
+            statusScrollView.heightAnchor.constraint(equalToConstant: 20),
 
             // Progress bar
             progressBar.topAnchor.constraint(equalTo: statusScrollView.bottomAnchor, constant: 8),
@@ -221,8 +221,22 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
         log("readSelection: received image from Continuity Camera")
         NSApp.activate(ignoringOtherApps: true)
         view.window?.makeKeyAndOrderFront(nil)
-        groupsWereSet([InputGroup(name: "Photo", inputs: [.image(image)])])
-        convert()
+
+        // Accumulate photos into a single group so multiple shots form one document
+        let existing = capturedGroups.first(where: { $0.name == "Photos" })
+        let newInputs = (existing?.inputs ?? []) + [.image(image)]
+        let newGroup = InputGroup(name: "Photos", inputs: newInputs)
+        if let idx = capturedGroups.firstIndex(where: { $0.name == "Photos" }) {
+            capturedGroups[idx] = newGroup
+        } else {
+            capturedGroups.append(newGroup)
+        }
+
+        placeholderLabel.isHidden = true
+        convertButton.isEnabled = true
+        dropZone.setPreview(image)
+        let n = newInputs.count
+        setStatus("📷 \(n) photo\(n == 1 ? "" : "s") ready — take more or click Convert")
         return true
     }
 
@@ -247,6 +261,7 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
 
         isProcessing = true
         convertButton.isEnabled = false
+        importButton.isEnabled = false
         spinner.isHidden = false
         spinner.startAnimation(nil)
         actualProgress = 0
@@ -300,6 +315,7 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
                 progressTimer = nil
                 isProcessing = false
                 convertButton.isEnabled = !capturedGroups.isEmpty
+                importButton.isEnabled = true
                 spinner.stopAnimation(nil)
                 spinner.isHidden = true
                 progressBar.isHidden = true

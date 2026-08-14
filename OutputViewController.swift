@@ -2,7 +2,7 @@ import AppKit
 
 // MARK: - Output View Controller
 
-class OutputViewController: NSViewController {
+class OutputViewController: NSViewController, NSSplitViewDelegate {
 
     struct Section {
         let name: String
@@ -12,10 +12,16 @@ class OutputViewController: NSViewController {
 
     private let sections: [Section]
     private var currentIndex = 0
+    private var zoomScale: CGFloat = 0.75
+    private var splitPositionSet = false
 
+    private var splitView: NSSplitView!
     private var documentPicker: NSPopUpButton!
     private var previewScrollView: NSScrollView!
-    private var previewStack: NSStackView!
+    private var previewStack: FlippedStackView!
+    private var zoomOutButton: NSButton!
+    private var zoomResetButton: NSButton!
+    private var zoomInButton: NSButton!
     private var outputScrollView: NSScrollView!
     private var outputView: NSTextView!
     private var outputModeControl: NSSegmentedControl!
@@ -38,6 +44,14 @@ class OutputViewController: NSViewController {
         showSection(at: 0)
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        if !splitPositionSet && view.bounds.width > 0 {
+            splitView.setPosition(view.bounds.width / 2, ofDividerAt: 0)
+            splitPositionSet = true
+        }
+    }
+
     private func buildUI() {
         let padding: CGFloat = 16
         let multiDoc = sections.count > 1
@@ -54,6 +68,26 @@ class OutputViewController: NSViewController {
         documentPicker.translatesAutoresizingMaskIntoConstraints = false
         leftPane.addSubview(documentPicker)
 
+        // Zoom controls
+        zoomOutButton = NSButton(title: "−", target: self, action: #selector(zoomOut))
+        zoomOutButton.bezelStyle = .rounded
+        zoomOutButton.translatesAutoresizingMaskIntoConstraints = false
+
+        zoomResetButton = NSButton(title: "100%", target: self, action: #selector(zoomReset))
+        zoomResetButton.bezelStyle = .rounded
+        zoomResetButton.font = NSFont.systemFont(ofSize: 11)
+        zoomResetButton.translatesAutoresizingMaskIntoConstraints = false
+
+        zoomInButton = NSButton(title: "+", target: self, action: #selector(zoomIn))
+        zoomInButton.bezelStyle = .rounded
+        zoomInButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let zoomBar = NSStackView(views: [zoomOutButton, zoomResetButton, zoomInButton])
+        zoomBar.orientation = .horizontal
+        zoomBar.spacing = 4
+        zoomBar.translatesAutoresizingMaskIntoConstraints = false
+        leftPane.addSubview(zoomBar)
+
         previewScrollView = NSScrollView()
         previewScrollView.hasVerticalScroller = true
         previewScrollView.hasHorizontalScroller = true
@@ -64,7 +98,7 @@ class OutputViewController: NSViewController {
         previewScrollView.translatesAutoresizingMaskIntoConstraints = false
         leftPane.addSubview(previewScrollView)
 
-        previewStack = NSStackView()
+        previewStack = FlippedStackView()
         previewStack.orientation = .vertical
         previewStack.spacing = 8
         previewStack.alignment = .centerX
@@ -72,6 +106,7 @@ class OutputViewController: NSViewController {
         previewScrollView.documentView = previewStack
 
         var leftConstraints: [NSLayoutConstraint] = [
+            zoomBar.trailingAnchor.constraint(equalTo: leftPane.trailingAnchor, constant: -padding),
             previewScrollView.leadingAnchor.constraint(equalTo: leftPane.leadingAnchor, constant: padding),
             previewScrollView.trailingAnchor.constraint(equalTo: leftPane.trailingAnchor, constant: -padding),
             previewScrollView.bottomAnchor.constraint(equalTo: leftPane.bottomAnchor, constant: -padding),
@@ -81,10 +116,14 @@ class OutputViewController: NSViewController {
                 documentPicker.topAnchor.constraint(equalTo: leftPane.topAnchor, constant: padding),
                 documentPicker.leadingAnchor.constraint(equalTo: leftPane.leadingAnchor, constant: padding),
                 documentPicker.trailingAnchor.constraint(equalTo: leftPane.trailingAnchor, constant: -padding),
-                previewScrollView.topAnchor.constraint(equalTo: documentPicker.bottomAnchor, constant: 8),
+                zoomBar.topAnchor.constraint(equalTo: documentPicker.bottomAnchor, constant: 6),
+                previewScrollView.topAnchor.constraint(equalTo: zoomBar.bottomAnchor, constant: 6),
             ]
         } else {
-            leftConstraints.append(previewScrollView.topAnchor.constraint(equalTo: leftPane.topAnchor, constant: padding))
+            leftConstraints += [
+                zoomBar.topAnchor.constraint(equalTo: leftPane.topAnchor, constant: padding),
+                previewScrollView.topAnchor.constraint(equalTo: zoomBar.bottomAnchor, constant: 6),
+            ]
         }
         NSLayoutConstraint.activate(leftConstraints)
 
@@ -125,9 +164,10 @@ class OutputViewController: NSViewController {
         ])
 
         // MARK: Split view
-        let splitView = NSSplitView()
+        splitView = NSSplitView()
         splitView.isVertical = true
         splitView.dividerStyle = .thin
+        splitView.delegate = self
         splitView.addArrangedSubview(leftPane)
         splitView.addArrangedSubview(rightPane)
         splitView.translatesAutoresizingMaskIntoConstraints = false
@@ -165,8 +205,42 @@ class OutputViewController: NSViewController {
         ])
 
         outputView.string = combinedText()
+        updateZoomLabel()
     }
 
+    // MARK: NSSplitViewDelegate
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        return 200
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        return splitView.bounds.width - 200
+    }
+
+    // MARK: Zoom
+    @objc private func zoomOut() {
+        zoomScale = max(0.1, zoomScale - 0.25)
+        updateZoomLabel()
+        showSection(at: currentIndex)
+    }
+
+    @objc private func zoomIn() {
+        zoomScale = min(4.0, zoomScale + 0.25)
+        updateZoomLabel()
+        showSection(at: currentIndex)
+    }
+
+    @objc private func zoomReset() {
+        zoomScale = 0.75
+        updateZoomLabel()
+        showSection(at: currentIndex)
+    }
+
+    private func updateZoomLabel() {
+        zoomResetButton.title = "\(Int(zoomScale * 100))%"
+    }
+
+    // MARK: Section display
     private func combinedText() -> String {
         if sections.count == 1 { return sections[0].content }
         return sections.map { "## \($0.name)\n\n\($0.content)" }.joined(separator: "\n\n---\n\n")
@@ -184,18 +258,17 @@ class OutputViewController: NSViewController {
             iv.imageScaling = .scaleProportionallyUpOrDown
             iv.translatesAutoresizingMaskIntoConstraints = false
             previewStack.addArrangedSubview(iv)
-            // Render at 2x so natural display size = img.size / 2; show at 75% of that
-            let displayWidth = img.size.width / 2.0 * 0.75
-            let displayHeight = img.size.height / 2.0 * 0.75
+            let displayWidth = img.size.width / 2.0 * zoomScale
+            let displayHeight = img.size.height / 2.0 * zoomScale
             NSLayoutConstraint.activate([
                 iv.widthAnchor.constraint(equalToConstant: displayWidth),
                 iv.heightAnchor.constraint(equalToConstant: displayHeight),
             ])
         }
-        DispatchQueue.main.async {
-            self.previewScrollView.contentView.scroll(to: .zero)
-            self.previewScrollView.reflectScrolledClipView(self.previewScrollView.contentView)
-        }
+
+        previewStack.layoutSubtreeIfNeeded()
+        previewScrollView.contentView.scroll(to: .zero)
+        previewScrollView.reflectScrolledClipView(previewScrollView.contentView)
     }
 
     @objc private func documentSelected() {
@@ -287,4 +360,10 @@ class OutputViewController: NSViewController {
             self?.actionButton.title = restore
         }
     }
+}
+
+// MARK: - Helpers
+
+private class FlippedStackView: NSStackView {
+    override var isFlipped: Bool { true }
 }

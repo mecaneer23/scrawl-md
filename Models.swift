@@ -2,8 +2,33 @@ import AppKit
 
 // MARK: - Enums
 
+enum LLMProvider: String {
+    case gemini, groq, openRouter
+}
+
 enum GeminiInput {
     case image(NSImage)
+}
+
+extension ConversionMode {
+    var prompt: String {
+        switch self {
+        case .verbatim:
+            return """
+            Transcribe this handwritten note or document into markdown as verbatim as possible. \
+            Preserve the exact words, phrasing, and layout. Only use markdown formatting (headings, \
+            bullets, bold) where clear visual structure exists in the original — don't add structure \
+            that isn't there. Output only the markdown, no preamble or commentary.
+            """
+        case .cleaned:
+            return """
+            Convert this handwritten note or document into clean, well-structured markdown. \
+            Fix spelling and grammar errors, improve clarity and flow, organize content logically, \
+            and use appropriate markdown formatting. Output only the polished markdown, no preamble \
+            or commentary.
+            """
+        }
+    }
 }
 
 struct InputGroup {

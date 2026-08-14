@@ -7,13 +7,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 370),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "ScrawlMD"
-        window.minSize = NSSize(width: 500, height: 500)
+        window.minSize = NSSize(width: 400, height: 300)
         window.center()
 
         let vc = MainViewController()

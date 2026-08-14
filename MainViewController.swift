@@ -10,34 +10,48 @@ class MainViewController: NSViewController {
     private var modeControl: NSSegmentedControl!
     private var convertButton: NSButton!
     private var spinner: NSProgressIndicator!
-    private var resultScrollView: NSScrollView!
-    private var resultView: NSTextView!
-    private var copyButton: NSButton!
     private var settingsButton: NSButton!
     private var statusScrollView: NSScrollView!
     private var statusView: NSTextView!
+    private var progressBar: NSProgressIndicator!
     private var importButton: NSButton!
 
     private var capturedGroups: [InputGroup] = []
     private var isProcessing = false
+    private var progressTimer: Timer?
+    private var actualProgress = 0.0
+    private var outputWindowControllers: [NSWindowController] = []
     private var autoConvertNext = false
     private var desktopMonitor: DispatchSourceFileSystemObject?
     private var monitorStartTime: Date?
     private let desktopURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
     private static let imageExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "tiff", "tif"]
 
-    private var apiKey: String {
+    private var selectedProvider: LLMProvider {
         get {
-            // Prefer environment variable, fall back to UserDefaults
-            if let envKey = ProcessInfo.processInfo.environment["GEMINI_API_KEY"], !envKey.isEmpty {
-                return envKey
-            }
+            LLMProvider(rawValue: UserDefaults.standard.string(forKey: "llmProvider") ?? "") ?? .gemini
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "llmProvider")
+        }
+    }
+
+    private var activeAPIKey: String {
+        switch selectedProvider {
+        case .gemini:
+            if let env = ProcessInfo.processInfo.environment["GEMINI_API_KEY"], !env.isEmpty { return env }
             return UserDefaults.standard.string(forKey: "geminiAPIKey") ?? ""
+        case .groq:
+            if let env = ProcessInfo.processInfo.environment["GROQ_API_KEY"], !env.isEmpty { return env }
+            return UserDefaults.standard.string(forKey: "groqAPIKey") ?? ""
+        case .openRouter:
+            if let env = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], !env.isEmpty { return env }
+            return UserDefaults.standard.string(forKey: "openRouterAPIKey") ?? ""
         }
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 680, height: 620))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 370))
         view.wantsLayer = true
     }
 
@@ -124,39 +138,16 @@ class MainViewController: NSViewController {
         statusView.isVerticallyResizable = false
         statusScrollView.documentView = statusView
 
-        // Result text view in scroll view
-        resultScrollView = NSScrollView()
-        resultScrollView.hasVerticalScroller = true
-        resultScrollView.hasHorizontalScroller = false
-        resultScrollView.autohidesScrollers = true
-        resultScrollView.borderType = .lineBorder
-        resultScrollView.wantsLayer = true
-        resultScrollView.layer?.cornerRadius = 8
-        resultScrollView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(resultScrollView)
-
-        resultView = NSTextView()
-        resultView.isEditable = true
-        resultView.isSelectable = true
-        resultView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        resultView.textContainerInset = NSSize(width: 8, height: 8)
-        resultView.isAutomaticSpellingCorrectionEnabled = false
-        resultView.isAutomaticQuoteSubstitutionEnabled = false
-        resultView.isVerticallyResizable = true
-        resultView.isHorizontallyResizable = false
-        resultView.autoresizingMask = [.width]
-        resultView.minSize = NSSize(width: 0, height: 0)
-        resultView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        resultView.textContainer?.widthTracksTextView = true
-        resultView.textContainer?.heightTracksTextView = false
-        resultScrollView.documentView = resultView
-
-        // Copy button
-        copyButton = NSButton(title: "Copy All", target: self, action: #selector(copyAll))
-        copyButton.bezelStyle = .rounded
-        copyButton.isEnabled = false
-        copyButton.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(copyButton)
+        // Progress bar
+        progressBar = NSProgressIndicator()
+        progressBar.style = .bar
+        progressBar.isIndeterminate = false
+        progressBar.minValue = 0
+        progressBar.maxValue = 100
+        progressBar.doubleValue = 0
+        progressBar.isHidden = true
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(progressBar)
 
         // MARK: Constraints
         NSLayoutConstraint.activate([
@@ -168,7 +159,7 @@ class MainViewController: NSViewController {
             modeControl.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
             modeControl.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
 
-            // Import button (below mode control, left side)
+            // Import button
             importButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
             importButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -8),
 
@@ -176,7 +167,7 @@ class MainViewController: NSViewController {
             dropZone.topAnchor.constraint(equalTo: modeControl.bottomAnchor, constant: 12),
             dropZone.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
             dropZone.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
-            dropZone.heightAnchor.constraint(equalToConstant: 180),
+            dropZone.heightAnchor.constraint(equalToConstant: 160),
 
             // Placeholder centered in drop zone
             placeholderLabel.centerXAnchor.constraint(equalTo: dropZone.centerXAnchor),
@@ -187,28 +178,23 @@ class MainViewController: NSViewController {
             convertButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             convertButton.widthAnchor.constraint(equalToConstant: 180),
 
-            // Spinner (next to button)
+            // Spinner
             spinner.centerYAnchor.constraint(equalTo: convertButton.centerYAnchor),
             spinner.leadingAnchor.constraint(equalTo: convertButton.trailingAnchor, constant: 8),
             spinner.widthAnchor.constraint(equalToConstant: 18),
             spinner.heightAnchor.constraint(equalToConstant: 18),
 
-            // Status scroll view
+            // Status
             statusScrollView.topAnchor.constraint(equalTo: convertButton.bottomAnchor, constant: 6),
             statusScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
             statusScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
-            statusScrollView.heightAnchor.constraint(equalToConstant: 18),
+            statusScrollView.heightAnchor.constraint(equalToConstant: 16),
 
-            // Result scroll view
-            resultScrollView.topAnchor.constraint(equalTo: statusScrollView.bottomAnchor, constant: 8),
-            resultScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
-            resultScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
-            resultScrollView.bottomAnchor.constraint(equalTo: copyButton.topAnchor, constant: -10),
-
-            // Copy button bottom-right
-            copyButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -padding),
-            copyButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
-            copyButton.widthAnchor.constraint(equalToConstant: 100),
+            // Progress bar
+            progressBar.topAnchor.constraint(equalTo: statusScrollView.bottomAnchor, constant: 8),
+            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
+            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
+            progressBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -padding),
         ])
 
     }
@@ -487,7 +473,7 @@ class MainViewController: NSViewController {
         }
     }
 
-    private func clearImage() {
+    private func clearInputs() {
         capturedGroups = []
         dropZone.image = nil
         placeholderLabel.isHidden = false
@@ -499,28 +485,50 @@ class MainViewController: NSViewController {
 
         let groups = capturedGroups
         let mode: ConversionMode = modeControl.selectedSegment == 0 ? .verbatim : .cleaned
-        let key = apiKey
+        let provider = selectedProvider
+        let key = activeAPIKey
         let multiFile = groups.count > 1
+
+        let totalUnits = Double(groups.reduce(0) { $0 + $1.inputs.count })
+        var completedUnits = 0.0
 
         isProcessing = true
         convertButton.isEnabled = false
         spinner.isHidden = false
         spinner.startAnimation(nil)
-        resultView.string = ""
-        copyButton.isEnabled = false
+        actualProgress = 0
+        progressBar.doubleValue = 0
+        progressBar.isHidden = false
+
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let current = self.progressBar.doubleValue
+            let nudged = min(95, current + 5)
+            self.progressBar.doubleValue = max(nudged, self.actualProgress)
+        }
 
         Task {
-            var sections: [String] = []
+            var outputSections: [OutputViewController.Section] = []
             var failed = false
             for (i, group) in groups.enumerated() {
-                let label = multiFile ? "\(i + 1) of \(groups.count): \(group.name)" : "1 of 1"
+                let label = multiFile ? "\(i + 1) of \(groups.count): \(group.name)" : group.name
                 await MainActor.run { setStatus("Converting \(label)…") }
                 do {
-                    let markdown = try await GeminiAPI.convert(inputs: group.inputs, mode: mode, apiKey: key)
-                    if multiFile {
-                        sections.append("## \(group.name)\n\n\(markdown)")
-                    } else {
-                        sections.append(markdown)
+                    let markdown = try await {
+                        switch provider {
+                        case .gemini:      return try await GeminiAPI.convert(inputs: group.inputs, mode: mode, apiKey: key)
+                        case .groq:        return try await GroqAPI.convert(inputs: group.inputs, mode: mode, apiKey: key)
+                        case .openRouter:  return try await OpenRouterAPI.convert(inputs: group.inputs, mode: mode, apiKey: key)
+                        }
+                    }()
+                    let previews = group.inputs.compactMap { if case .image(let img) = $0 { return img } else { return nil as NSImage? } }
+                    let name = group.name.isEmpty ? "Document" : group.name
+                    outputSections.append(OutputViewController.Section(name: name, content: markdown, previews: previews))
+                    completedUnits += Double(group.inputs.count)
+                    let pct = totalUnits > 0 ? completedUnits / totalUnits * 100 : 100
+                    await MainActor.run {
+                        actualProgress = pct
+                        progressBar.doubleValue = max(progressBar.doubleValue, pct)
                     }
                 } catch {
                     await MainActor.run { setStatus("Error on \(group.name): \(error.localizedDescription)") }
@@ -529,47 +537,146 @@ class MainViewController: NSViewController {
                 }
             }
             await MainActor.run {
-                if !sections.isEmpty {
-                    resultView.string = sections.joined(separator: "\n\n---\n\n")
-                    copyButton.isEnabled = true
+                if !outputSections.isEmpty {
                     if !failed { setStatus("Done.") }
-                    clearImage()
+                    clearInputs()
+                    openOutputWindow(sections: outputSections)
                 }
+                progressTimer?.invalidate()
+                progressTimer = nil
                 isProcessing = false
                 convertButton.isEnabled = !capturedGroups.isEmpty
                 spinner.stopAnimation(nil)
                 spinner.isHidden = true
+                progressBar.isHidden = true
+                progressBar.doubleValue = 0
+                actualProgress = 0
             }
         }
     }
 
-    @objc private func copyAll() {
-        let text = resultView.string
-        guard !text.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        copyButton.title = "Copied!"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.copyButton.title = "Copy All"
+    private func openOutputWindow(sections: [OutputViewController.Section]) {
+        let vc = OutputViewController(sections: sections)
+        let title = sections.count == 1 ? sections[0].name : "ScrawlMD — \(sections.count) Documents"
+        let screenWidth = NSScreen.main?.visibleFrame.width ?? 1200
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
+        let winWidth = min(1100, screenWidth)
+        let winHeight = min(700, screenHeight)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: winWidth, height: winHeight),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = title
+        window.minSize = NSSize(width: 500, height: 350)
+        window.contentViewController = vc
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        let wc = NSWindowController(window: window)
+        outputWindowControllers.append(wc)
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.outputWindowControllers.removeAll { $0.window === window }
         }
     }
 
     @objc private func openSettings() {
         let alert = NSAlert()
-        alert.messageText = "Gemini API Key"
-        alert.informativeText = "Enter your Gemini API key. It will be stored in app preferences.\nYou can also set the GEMINI_API_KEY environment variable."
+        alert.messageText = "Settings"
+        alert.informativeText = "API keys are stored in preferences. Environment variables (GEMINI_API_KEY, GROQ_API_KEY) take precedence."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
-        field.placeholderString = "AIza..."
-        field.stringValue = UserDefaults.standard.string(forKey: "geminiAPIKey") ?? ""
-        alert.accessoryView = field
+        let rowH: CGFloat = 26
+        let labelW: CGFloat = 100
+        let fieldX = labelW + 8
+        let fieldW: CGFloat = 276
+        let totalW = labelW + 8 + fieldW
+        let gap: CGFloat = 4
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: totalW, height: rowH * 7 + gap * 6 + 12))
 
-        alert.window.initialFirstResponder = field
+        func label(_ s: String, y: CGFloat) -> NSTextField {
+            let f = NSTextField(labelWithString: s)
+            f.frame = NSRect(x: 0, y: y, width: labelW, height: rowH)
+            f.alignment = .right
+            return f
+        }
+        func rowY(_ row: Int) -> CGFloat { CGFloat(row) * (rowH + gap) }
+
+        // Row 6 (top): Provider
+        let providerLabel = label("Provider:", y: rowY(6) + 12)
+        let providerPicker = NSPopUpButton(frame: NSRect(x: fieldX, y: rowY(6) + 12, width: fieldW, height: rowH), pullsDown: false)
+        providerPicker.addItems(withTitles: ["Gemini", "Groq", "OpenRouter"])
+        let currentTitle: String
+        switch selectedProvider {
+        case .gemini: currentTitle = "Gemini"
+        case .groq: currentTitle = "Groq"
+        case .openRouter: currentTitle = "OpenRouter"
+        }
+        providerPicker.selectItem(withTitle: currentTitle)
+
+        // Row 5: Gemini model
+        let geminiModelLabel = label("Gemini model:", y: rowY(5) + 8)
+        let geminiModelField = NSTextField(frame: NSRect(x: fieldX, y: rowY(5) + 8, width: fieldW, height: rowH))
+        geminiModelField.placeholderString = "\(GeminiAPI.defaultModel) / gemini-3.5-flash-lite"
+        geminiModelField.stringValue = UserDefaults.standard.string(forKey: "geminiModel") ?? ""
+
+        // Row 4: Gemini key
+        let geminiLabel = label("Gemini key:", y: rowY(4) + 8)
+        let geminiField = NSSecureTextField(frame: NSRect(x: fieldX, y: rowY(4) + 8, width: fieldW, height: rowH))
+        geminiField.placeholderString = "AIza…"
+        geminiField.stringValue = UserDefaults.standard.string(forKey: "geminiAPIKey") ?? ""
+
+        // Row 3: Groq key
+        let groqLabel = label("Groq key:", y: rowY(3) + 4)
+        let groqField = NSSecureTextField(frame: NSRect(x: fieldX, y: rowY(3) + 4, width: fieldW, height: rowH))
+        groqField.placeholderString = "gsk_…"
+        groqField.stringValue = UserDefaults.standard.string(forKey: "groqAPIKey") ?? ""
+
+        // Row 2: Groq model
+        let groqModelLabel = label("Groq model:", y: rowY(2))
+        let groqModelField = NSTextField(frame: NSRect(x: fieldX, y: rowY(2), width: fieldW, height: rowH))
+        groqModelField.placeholderString = GroqAPI.defaultModel
+        groqModelField.stringValue = UserDefaults.standard.string(forKey: "groqModel") ?? ""
+
+        // Row 1: OpenRouter key
+        let orLabel = label("OpenRouter key:", y: rowY(1))
+        let orField = NSSecureTextField(frame: NSRect(x: fieldX, y: rowY(1), width: fieldW, height: rowH))
+        orField.placeholderString = "sk-or-…"
+        orField.stringValue = UserDefaults.standard.string(forKey: "openRouterAPIKey") ?? ""
+
+        // Row 0: OpenRouter model
+        let orModelLabel = label("OR model:", y: rowY(0))
+        let orModelField = NSTextField(frame: NSRect(x: fieldX, y: rowY(0), width: fieldW, height: rowH))
+        orModelField.placeholderString = OpenRouterAPI.defaultModel
+        orModelField.stringValue = UserDefaults.standard.string(forKey: "openRouterModel") ?? ""
+
+        for v in [providerLabel, providerPicker, geminiModelLabel, geminiModelField,
+                  geminiLabel, geminiField, groqLabel, groqField,
+                  groqModelLabel, groqModelField, orLabel, orField,
+                  orModelLabel, orModelField] {
+            container.addSubview(v)
+        }
+        alert.accessoryView = container
+
+        alert.window.initialFirstResponder = geminiField
         if alert.runModal() == .alertFirstButtonReturn {
-            let value = field.stringValue.trimmingCharacters(in: .whitespaces)
-            UserDefaults.standard.set(value, forKey: "geminiAPIKey")
+            UserDefaults.standard.set(geminiModelField.stringValue.trimmingCharacters(in: .whitespaces), forKey: "geminiModel")
+            UserDefaults.standard.set(geminiField.stringValue.trimmingCharacters(in: .whitespaces), forKey: "geminiAPIKey")
+            UserDefaults.standard.set(groqField.stringValue.trimmingCharacters(in: .whitespaces), forKey: "groqAPIKey")
+            UserDefaults.standard.set(groqModelField.stringValue.trimmingCharacters(in: .whitespaces), forKey: "groqModel")
+            UserDefaults.standard.set(orField.stringValue.trimmingCharacters(in: .whitespaces), forKey: "openRouterAPIKey")
+            UserDefaults.standard.set(orModelField.stringValue.trimmingCharacters(in: .whitespaces), forKey: "openRouterModel")
+            switch providerPicker.titleOfSelectedItem {
+            case "Groq": selectedProvider = .groq
+            case "OpenRouter": selectedProvider = .openRouter
+            default: selectedProvider = .gemini
+            }
+            log("settings saved: provider=\(selectedProvider.rawValue), geminiModel=\(GeminiAPI.model), groqModel=\(GroqAPI.model), orModel=\(OpenRouterAPI.model)")
         }
     }
 

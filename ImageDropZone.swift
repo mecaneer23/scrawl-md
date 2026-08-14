@@ -34,6 +34,39 @@ class ImageDropZone: NSImageView {
         }
     }
 
+    override func mouseDown(with event: NSEvent) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [
+            .init(filenameExtension: "jpg")!, .init(filenameExtension: "jpeg")!,
+            .init(filenameExtension: "png")!, .init(filenameExtension: "heic")!,
+            .init(filenameExtension: "heif")!, .init(filenameExtension: "tiff")!,
+            .init(filenameExtension: "tif")!,  .init(filenameExtension: "pdf")!,
+        ]
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+
+        var groups: [InputGroup] = []
+        for url in panel.urls {
+            let name = url.deletingPathExtension().lastPathComponent
+            if url.pathExtension.lowercased() == "pdf", let doc = PDFDocument(url: url) {
+                let pages = renderPDFPages(doc)
+                if !pages.isEmpty { groups.append(InputGroup(name: name, inputs: pages.map { .image($0) })) }
+            } else if let img = NSImage(contentsOf: url) {
+                groups.append(InputGroup(name: name, inputs: [.image(img)]))
+            }
+        }
+        guard !groups.isEmpty else { return }
+
+        suppressCallback = true
+        if case .image(let first) = groups.first?.inputs.first { image = first }
+        suppressCallback = false
+        let totalInputs = groups.reduce(0) { $0 + $1.inputs.count }
+        log("mouseDown open panel: \(groups.count) group(s), \(totalInputs) input(s)")
+        onGroupsSet?(groups)
+    }
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
         guard let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],

@@ -44,6 +44,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(.separator())
+        let cameraItem = NSMenuItem(title: "Take Photo", action: nil, keyEquivalent: "")
+        cameraItem.identifier = NSMenuItem.importFromDeviceIdentifier
+        editMenu.addItem(cameraItem)
+        editMenu.addItem(.separator())
         let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
         let servicesMenu = NSMenu(title: "Services")
         servicesItem.submenu = servicesMenu

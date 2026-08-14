@@ -1,9 +1,8 @@
 import AppKit
-import ApplicationServices
 
 // MARK: - Main View Controller
 
-class MainViewController: NSViewController {
+class MainViewController: NSViewController, NSServicesMenuRequestor {
 
     private var dropZone: ImageDropZone!
     private var placeholderLabel: NSTextField!
@@ -21,11 +20,6 @@ class MainViewController: NSViewController {
     private var progressTimer: Timer?
     private var actualProgress = 0.0
     private var outputWindowControllers: [NSWindowController] = []
-    private var autoConvertNext = false
-    private var desktopMonitor: DispatchSourceFileSystemObject?
-    private var monitorStartTime: Date?
-    private let desktopURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
-    private static let imageExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "tiff", "tif"]
 
     private var selectedProvider: LLMProvider {
         get {
@@ -200,277 +194,36 @@ class MainViewController: NSViewController {
     }
 
     private func groupsWereSet(_ groups: [InputGroup]) {
-        log("groupsWereSet: \(groups.count) group(s), autoConvertNext=\(autoConvertNext)")
+        log("groupsWereSet: \(groups.count) group(s)")
         capturedGroups = groups
         placeholderLabel.isHidden = true
         convertButton.isEnabled = true
         setStatus("")
-        if autoConvertNext {
-            log("groupsWereSet: auto-triggering convert")
-            autoConvertNext = false
-            convert()
-        }
     }
 
     @objc private func importFromPhone() {
-        log("importFromPhone: button tapped")
-
-        guard let finder = NSRunningApplication
-            .runningApplications(withBundleIdentifier: "com.apple.finder").first else {
-            setStatus("Finder is not running.")
-            return
-        }
-
-        // Probe AX directly rather than using AXIsProcessTrusted(), which breaks after
-        // each re-sign because macOS keys the TCC entry to the binary's code signature.
-        let probeEl = AXUIElementCreateApplication(finder.processIdentifier)
-        var probeRef: CFTypeRef?
-        let probeErr = AXUIElementCopyAttributeValue(probeEl, kAXTitleAttribute as CFString, &probeRef)
-        log("importFromPhone: AX probe err=\(probeErr.rawValue) isTrusted=\(AXIsProcessTrusted())")
-
-        if probeErr == .apiDisabled || probeErr == .notImplemented {
-            let opts = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
-            AXIsProcessTrustedWithOptions(opts)
-            setStatus("Enable Accessibility for ScrawlMD in System Settings > Privacy, then click Take Photo again.")
-            return
-        }
-
-        startDesktopMonitor()
-        finder.activate(options: [])
-        importButton.title = "⏳  Waiting… (click to cancel)"
-        importButton.action = #selector(cancelDesktopMonitor)
-        setStatus("Opening iPhone camera…")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            self?.rightClickFinderDesktop(finderPID: finder.processIdentifier)
-        }
+        let menu = NSMenu()
+        guard let event = NSApp.currentEvent else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: importButton)
     }
 
-    private func rightClickFinderDesktop(finderPID: pid_t) {
-        let finderApp = AXUIElementCreateApplication(finderPID)
+    // MARK: - NSServicesMenuRequestor / Continuity Camera
 
-        // Determine click target: prefer the desktop element's actual frame,
-        // fall back to a window-free point found via CGWindowList.
-        var clickPt: CGPoint?
-
-        if let desktop = findFinderDesktop(in: finderApp), let frame = axFrame(desktop) {
-            log("rightClickFinderDesktop: using desktop frame \(frame)")
-            clickPt = CGPoint(x: frame.midX, y: frame.midY)
-        }
-
-        if clickPt == nil, let pt = safeDesktopPoint() {
-            log("rightClickFinderDesktop: using safeDesktopPoint \(pt)")
-            clickPt = pt
-        }
-
-        guard let pt = clickPt else {
-            log("rightClickFinderDesktop: no clickable point found")
-            setStatus("Could not find open desktop area. Right-click the desktop manually → Import from iPhone → Take a Picture")
-            return
-        }
-
-        postRightClick(at: pt, finderPID: finderPID)
+    override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?,
+                                 returnType: NSPasteboard.PasteboardType?) -> Any? {
+        let imageTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
+        if let returnType, imageTypes.contains(returnType) { return self }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
     }
 
-    private func findFinderDesktop(in finderApp: AXUIElement) -> AXUIElement? {
-        // The Finder desktop is an AXScrollArea (sometimes with subrole AXDesktopList).
-        // It's a direct child of the Finder application element.
-        let children = axChildren(finderApp)
-        log("findFinderDesktop: Finder children = \(children.map { "\(axRole($0))/\(axSubrole($0)) '\(axTitle($0))'" })")
-        let result = children.first {
-            axRole($0) == "AXScrollArea"
-            || axSubrole($0).localizedCaseInsensitiveContains("desktop")
-            || axRole($0).localizedCaseInsensitiveContains("desktop")
-        }
-        log("findFinderDesktop: \(result == nil ? "not found" : "found \(axRole(result!))/\(axSubrole(result!))")")
-        return result
-    }
-
-    private func safeDesktopPoint() -> CGPoint? {
-        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        let windowRects: [CGRect] = (CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] ?? [])
-            .compactMap { info in
-                guard let b = info[kCGWindowBounds as String] as? [String: CGFloat],
-                      let x = b["X"], let y = b["Y"], let w = b["Width"], let h = b["Height"]
-                else { return nil }
-                return CGRect(x: x, y: y, width: w, height: h)
-            }
-        let primaryH = NSScreen.screens.first?.frame.height ?? 0
-        for screen in NSScreen.screens {
-            let sf = screen.frame
-            let cgRect = CGRect(x: sf.minX, y: primaryH - sf.maxY, width: sf.width, height: sf.height)
-            let inset: CGFloat = 100
-            for xf: CGFloat in [0.3, 0.5, 0.7, 0.2, 0.8] {
-                for yf: CGFloat in [0.4, 0.6, 0.3, 0.7] {
-                    let pt = CGPoint(x: cgRect.minX + cgRect.width * xf,
-                                     y: cgRect.minY + inset + (cgRect.height - inset * 2) * yf)
-                    if !windowRects.contains(where: { $0.contains(pt) }) { return pt }
-                }
-            }
-        }
-        return nil
-    }
-
-    private func postRightClick(at pt: CGPoint, finderPID: pid_t) {
-        CGWarpMouseCursorPosition(pt)
-        guard let down = CGEvent(mouseEventSource: nil, mouseType: .rightMouseDown,
-                                 mouseCursorPosition: pt, mouseButton: .right),
-              let up   = CGEvent(mouseEventSource: nil, mouseType: .rightMouseUp,
-                                 mouseCursorPosition: pt, mouseButton: .right) else {
-            log("postRightClick: failed to create CGEvents"); return
-        }
-        down.post(tap: .cgSessionEventTap)
-        up.post(tap: .cgSessionEventTap)
-        log("postRightClick: posted at \(pt)")
-        pollForFinderContextMenu(finderPID: finderPID, attempt: 0)
-    }
-
-    private func pollForFinderContextMenu(finderPID: pid_t, attempt: Int) {
-        let finderApp = AXUIElementCreateApplication(finderPID)
-        let topChildren = axChildren(finderApp)
-
-        // Context menu may be a direct child of the app or a child of the desktop AXScrollArea.
-        var candidates = topChildren
-        for child in topChildren { candidates += axChildren(child) }
-        log("pollForFinderContextMenu #\(attempt): searching \(candidates.count) elements, roles=\(candidates.map { axRole($0) }.filter { $0 == "AXMenu" })")
-
-        if let menu = candidates.first(where: { axRole($0) == "AXMenu" }) {
-            let items = axChildren(menu)
-            log("pollForFinderContextMenu: found AXMenu items=\(axTitles(items))")
-            clickImportFromiPhone(in: items)
-            return
-        }
-
-        guard attempt < 10 else {
-            log("pollForFinderContextMenu: gave up — falling back to manual")
-            setStatus("Could not find context menu. Right-click your desktop manually → Import from iPhone → Take a Picture")
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.pollForFinderContextMenu(finderPID: finderPID, attempt: attempt + 1)
-        }
-    }
-
-    private func clickImportFromiPhone(in items: [AXUIElement]) {
-        guard let importItem = items.first(where: {
-            let t = axTitle($0)
-            return t.localizedCaseInsensitiveContains("iPhone") || t.localizedCaseInsensitiveContains("Import")
-        }) else {
-            log("clickImportFromiPhone: not found in \(axTitles(items))")
-            setStatus("Import from iPhone not found. Is your iPhone nearby?")
-            return
-        }
-        log("clickImportFromiPhone: pressing '\(axTitle(importItem))'")
-        AXUIElementPerformAction(importItem, kAXPressAction as CFString)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self else { return }
-            // The submenu is a child of the menu item; its children are the actual items
-            let submenuItems = self.axChildren(self.axChildren(importItem).first ?? importItem)
-            log("clickImportFromiPhone: submenu items = \(self.axTitles(submenuItems))")
-            self.clickTakeAPicture(in: submenuItems)
-        }
-    }
-
-    private func clickTakeAPicture(in items: [AXUIElement]) {
-        guard let item = items.first(where: {
-            let t = axTitle($0)
-            return t.localizedCaseInsensitiveContains("picture") || t.localizedCaseInsensitiveContains("photo")
-        }) else {
-            log("clickTakeAPicture: not found in \(axTitles(items))")
-            setStatus("'Take a Picture' not found. Is your iPhone nearby?")
-            return
-        }
-        log("clickTakeAPicture: clicking '\(axTitle(item))'")
-        AXUIElementPerformAction(item, kAXPressAction as CFString)
-        setStatus("Photo taken — importing…")
-    }
-
-    // MARK: - AX helpers
-    private func axChildren(_ el: AXUIElement) -> [AXUIElement] {
-        var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &ref) == .success else { return [] }
-        return (ref as? [AXUIElement]) ?? []
-    }
-    private func axTitle(_ el: AXUIElement) -> String {
-        var ref: CFTypeRef?
-        AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &ref)
-        return (ref as? String) ?? ""
-    }
-    private func axRole(_ el: AXUIElement) -> String {
-        var ref: CFTypeRef?
-        AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &ref)
-        return (ref as? String) ?? ""
-    }
-    private func axTitles(_ els: [AXUIElement]) -> [String] { els.map { axTitle($0) } }
-    private func axSubrole(_ el: AXUIElement) -> String {
-        var ref: CFTypeRef?
-        AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &ref)
-        return (ref as? String) ?? ""
-    }
-    private func axFrame(_ el: AXUIElement) -> CGRect? {
-        var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, "AXFrame" as CFString, &ref) == .success,
-              let val = ref else { return nil }
-        var rect = CGRect.zero
-        AXValueGetValue(val as! AXValue, .cgRect, &rect)
-        return rect.isEmpty ? nil : rect
-    }
-
-    @objc private func cancelDesktopMonitor() {
-        log("cancelDesktopMonitor")
-        stopDesktopMonitor()
-        setStatus("")
-        importButton.title = "📷  Take Photo"
-        importButton.action = #selector(importFromPhone)
-    }
-
-    private func startDesktopMonitor() {
-        stopDesktopMonitor()
-        monitorStartTime = Date()
-        log("startDesktopMonitor: watching \(desktopURL.path)")
-        let fd = open(desktopURL.path, O_EVTONLY)
-        guard fd >= 0 else { log("startDesktopMonitor: open() failed"); return }
-        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
-        src.setEventHandler { [weak self] in self?.checkDesktopForNewImage() }
-        src.setCancelHandler { close(fd) }
-        src.resume()
-        desktopMonitor = src
-    }
-
-    private func stopDesktopMonitor() {
-        desktopMonitor?.cancel()
-        desktopMonitor = nil
-        monitorStartTime = nil
-    }
-
-    private func checkDesktopForNewImage() {
-        guard let startTime = monitorStartTime else { return }
-        let keys: [URLResourceKey] = [.creationDateKey, .contentModificationDateKey]
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: desktopURL, includingPropertiesForKeys: keys, options: .skipsHiddenFiles
-        ) else { return }
-
-        for url in contents {
-            guard Self.imageExtensions.contains(url.pathExtension.lowercased()) else { continue }
-            guard let vals = try? url.resourceValues(forKeys: Set(keys)),
-                  let created = vals.creationDate, created >= startTime else { continue }
-            log("checkDesktopForNewImage: found \(url.lastPathComponent) created=\(created)")
-            guard let image = NSImage(contentsOf: url) else { continue }
-
-            stopDesktopMonitor()
-            importButton.title = "📷  Take Photo"
-            importButton.action = #selector(importFromPhone)
-
-            try? FileManager.default.removeItem(at: url)
-            log("checkDesktopForNewImage: deleted \(url.lastPathComponent)")
-
-            NSApp.activate(ignoringOtherApps: true)
-            view.window?.makeKeyAndOrderFront(nil)
-            autoConvertNext = true
-            groupsWereSet([InputGroup(name: "", inputs: [.image(image)])])
-            break
-        }
+    func readSelection(from pboard: NSPasteboard) -> Bool {
+        guard let image = NSImage(pasteboard: pboard) else { return false }
+        log("readSelection: received image from Continuity Camera")
+        NSApp.activate(ignoringOtherApps: true)
+        view.window?.makeKeyAndOrderFront(nil)
+        groupsWereSet([InputGroup(name: "Photo", inputs: [.image(image)])])
+        convert()
+        return true
     }
 
     private func clearInputs() {

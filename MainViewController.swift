@@ -500,10 +500,11 @@ class MainViewController: NSViewController {
         progressBar.doubleValue = 0
         progressBar.isHidden = false
 
+        let tickSize = 5.0 / Double(groups.count)
         progressTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             let current = self.progressBar.doubleValue
-            let nudged = min(95, current + 5)
+            let nudged = min(95, current + tickSize)
             self.progressBar.doubleValue = max(nudged, self.actualProgress)
         }
 

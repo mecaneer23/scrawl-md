@@ -192,7 +192,10 @@ class OutputViewController: NSViewController {
                 iv.heightAnchor.constraint(equalToConstant: displayHeight),
             ])
         }
-        previewScrollView.contentView.scroll(to: .zero)
+        DispatchQueue.main.async {
+            self.previewScrollView.contentView.scroll(to: .zero)
+            self.previewScrollView.reflectScrolledClipView(self.previewScrollView.contentView)
+        }
     }
 
     @objc private func documentSelected() {

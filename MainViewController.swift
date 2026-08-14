@@ -10,8 +10,7 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
     private var convertButton: NSButton!
     private var spinner: NSProgressIndicator!
     private var settingsButton: NSButton!
-    private var statusScrollView: NSScrollView!
-    private var statusView: NSTextView!
+    private var statusLabel: NSTextField!
     private var progressBar: NSProgressIndicator!
     private var importButton: NSButton!
 
@@ -110,27 +109,12 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
         view.addSubview(spinner)
 
         // Status scroll view (single-line, horizontally scrollable)
-        statusScrollView = NSScrollView()
-        statusScrollView.hasHorizontalScroller = true
-        statusScrollView.hasVerticalScroller = false
-        statusScrollView.autohidesScrollers = true
-        statusScrollView.borderType = .noBorder
-        statusScrollView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(statusScrollView)
-
-        statusView = NSTextView()
-        statusView.isEditable = false
-        statusView.isSelectable = true
-        statusView.font = NSFont.systemFont(ofSize: 12)
-        statusView.textColor = .labelColor
-        statusView.backgroundColor = .clear
-        statusView.textContainerInset = .zero
-        statusView.textContainer?.lineFragmentPadding = 0
-        statusView.textContainer?.widthTracksTextView = false
-        statusView.textContainer?.containerSize = CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        statusView.isHorizontallyResizable = true
-        statusView.isVerticallyResizable = false
-        statusScrollView.documentView = statusView
+        statusLabel = NSTextField(labelWithString: "")
+        statusLabel.font = NSFont.systemFont(ofSize: 12)
+        statusLabel.textColor = .labelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(statusLabel)
 
         // Progress bar
         progressBar = NSProgressIndicator()
@@ -179,13 +163,12 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
             spinner.heightAnchor.constraint(equalToConstant: 18),
 
             // Status
-            statusScrollView.topAnchor.constraint(equalTo: convertButton.bottomAnchor, constant: 6),
-            statusScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
-            statusScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
-            statusScrollView.heightAnchor.constraint(equalToConstant: 20),
+            statusLabel.topAnchor.constraint(equalTo: convertButton.bottomAnchor, constant: 6),
+            statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
+            statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
 
             // Progress bar
-            progressBar.topAnchor.constraint(equalTo: statusScrollView.bottomAnchor, constant: 8),
+            progressBar.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
             progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: padding),
             progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -padding),
             progressBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -padding),
@@ -451,7 +434,7 @@ class MainViewController: NSViewController, NSServicesMenuRequestor {
     }
 
     private func setStatus(_ msg: String) {
-        statusView.string = msg
+        statusLabel.stringValue = msg
         if !msg.isEmpty { log("status: \(msg)") }
     }
 }
